@@ -1,0 +1,18 @@
+{
+  "dataset_name": "WN18RR",
+  "benchmark_path": "./benchmarks/WN18RR/",
+  "learning_rate": 0.1,
+  "nbatches": 100,
+  "num_epochs": 40000,
+  "neg_num": 5,
+  "hidden_size": 500,
+  "save_steps": 400,
+  "valid_steps": 400,
+  "lmbda": 0.5,
+  "lmbda2": 0.01,
+  "optim": "adagrad",
+  "work_threads": 8,
+  "early_stopping_patience": 10,
+  "test_link": true,
+  "test_triple": false
+}

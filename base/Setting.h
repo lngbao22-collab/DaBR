@@ -9,6 +9,7 @@
 std::string inPath = "../data/FB15K/";
 std::string outPath = "../data/FB15K/";
 std::string testFilePath = "";
+std::string tripleClassificationPath = "";
 
 extern "C"
 void setInPath(char *path) {
@@ -26,6 +27,15 @@ void setTestFilePath(char *path) {
 	for (INT i = 0; i < len; i++)
 		testFilePath = testFilePath + path[i];
 	printf("Test File Path : %s\n", testFilePath.c_str());
+}
+
+extern "C"
+void setTripleClassificationPath(char *path) {
+	INT len = strlen(path);
+	tripleClassificationPath = "";
+	for (INT i = 0; i < len; i++)
+		tripleClassificationPath = tripleClassificationPath + path[i];
+	printf("Triple Classification Path : %s\n", tripleClassificationPath.c_str());
 }
 
 extern "C"
@@ -63,6 +73,8 @@ INT tripleTotal = 0;
 INT testTotal = 0;
 INT trainTotal = 0;
 INT validTotal = 0;
+extern INT validClassTotal;
+extern INT testClassTotal;
 
 extern "C"
 INT getEntityTotal() {
@@ -87,6 +99,16 @@ INT getTrainTotal() {
 extern "C"
 INT getTestTotal() {
 	return testTotal;
+}
+
+extern "C"
+INT getValidClassificationTotal() {
+	return validClassTotal;
+}
+
+extern "C"
+INT getTestClassificationTotal() {
+	return testClassTotal;
 }
 
 extern "C"

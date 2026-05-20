@@ -291,6 +291,17 @@ void getNegValid() {
 
 extern "C"
 void getTestBatch(INT *ph, INT *pt, INT *pr, INT *nh, INT *nt, INT *nr) {
+    if (testClassTotal > 0) {
+        for (INT i = 0; i < testClassTotal; i++) {
+            ph[i] = testClassPosList[i].h;
+            pt[i] = testClassPosList[i].t;
+            pr[i] = testClassPosList[i].r;
+            nh[i] = testClassNegList[i].h;
+            nt[i] = testClassNegList[i].t;
+            nr[i] = testClassNegList[i].r;
+        }
+        return;
+    }
     getNegTest();
     for (INT i = 0; i < testTotal; i++) {
         ph[i] = testList[i].h;
@@ -304,6 +315,17 @@ void getTestBatch(INT *ph, INT *pt, INT *pr, INT *nh, INT *nt, INT *nr) {
 
 extern "C"
 void getValidBatch(INT *ph, INT *pt, INT *pr, INT *nh, INT *nt, INT *nr) {
+    if (validClassTotal > 0) {
+        for (INT i = 0; i < validClassTotal; i++) {
+            ph[i] = validClassPosList[i].h;
+            pt[i] = validClassPosList[i].t;
+            pr[i] = validClassPosList[i].r;
+            nh[i] = validClassNegList[i].h;
+            nt[i] = validClassNegList[i].t;
+            nr[i] = validClassNegList[i].r;
+        }
+        return;
+    }
     getNegValid();
     for (INT i = 0; i < validTotal; i++) {
         ph[i] = validList[i].h;
@@ -320,14 +342,17 @@ void getBestThreshold(REAL *relThresh, REAL *score_pos, REAL *score_neg) {
     REAL interval = 0.01;
     REAL min_score, max_score, bestThresh, tmpThresh, bestAcc, tmpAcc;
     INT n_interval, correct, total;
+    INT *lef = validClassTotal > 0 ? validClassLef : validLef;
+    INT *rig = validClassTotal > 0 ? validClassRig : validRig;
+    INT class_total = validClassTotal > 0 ? validClassTotal : validTotal;
     for (INT r = 0; r < relationTotal; r++) {
-        if (validLef[r] == -1) continue;
-        total = (validRig[r] - validLef[r] + 1) * 2;
-        min_score = score_pos[validLef[r]];
-        if (score_neg[validLef[r]] < min_score) min_score = score_neg[validLef[r]];
-        max_score = score_pos[validLef[r]];
-        if (score_neg[validLef[r]] > max_score) max_score = score_neg[validLef[r]];
-        for (INT i = validLef[r]+1; i <= validRig[r]; i++) {
+        if (lef[r] == -1) continue;
+        total = (rig[r] - lef[r] + 1) * 2;
+        min_score = score_pos[lef[r]];
+        if (score_neg[lef[r]] < min_score) min_score = score_neg[lef[r]];
+        max_score = score_pos[lef[r]];
+        if (score_neg[lef[r]] > max_score) max_score = score_neg[lef[r]];
+        for (INT i = lef[r]+1; i <= rig[r]; i++) {
             if(score_pos[i] < min_score) min_score = score_pos[i];
             if(score_pos[i] > max_score) max_score = score_pos[i];
             if(score_neg[i] < min_score) min_score = score_neg[i];
@@ -337,7 +362,7 @@ void getBestThreshold(REAL *relThresh, REAL *score_pos, REAL *score_neg) {
         for (INT i = 0; i <= n_interval; i++) {
             tmpThresh = min_score + i * interval;
             correct = 0;
-            for (INT j = validLef[r]; j <= validRig[r]; j++) {
+            for (INT j = lef[r]; j <= rig[r]; j++) {
                 if (score_pos[j] <= tmpThresh) correct ++;
                 if (score_neg[j] > tmpThresh) correct ++;
             }
@@ -361,10 +386,17 @@ REAL test_triple_classification(REAL *relThresh, REAL *score_pos, REAL *score_ne
     testAcc = (REAL *)calloc(relationTotal, sizeof(REAL));
     INT aveCorrect = 0, aveTotal = 0;
     REAL aveAcc;
+    INT *lef = testClassTotal > 0 ? testClassLef : testLef;
+    INT *rig = testClassTotal > 0 ? testClassRig : testRig;
+    INT total = testClassTotal > 0 ? testClassTotal : testTotal;
     for (INT r = 0; r < relationTotal; r++) {
-        if (validLef[r] == -1 || testLef[r] ==-1) continue;
+        if (testClassTotal > 0) {
+            if (validClassLef[r] == -1 || testClassLef[r] == -1) continue;
+        } else if (validLef[r] == -1 || testLef[r] == -1) {
+            continue;
+        }
         INT correct = 0, total = 0;
-        for (INT i = testLef[r]; i <= testRig[r]; i++) {
+        for (INT i = lef[r]; i <= rig[r]; i++) {
             if (score_pos[i] <= relThresh[r]) correct++;
             if (score_neg[i] > relThresh[r]) correct++;
             total += 2;

@@ -1,6 +1,5 @@
-from config.Config import Config
-from models.DaBR import DaBR
-import json
+from config.config import Config
+from models.dabr import DaBR
 import os
 
 

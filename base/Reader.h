@@ -4,12 +4,19 @@
 #include "Triple.h"
 #include <cstdlib>
 #include <algorithm>
+#include <fstream>
+#include <numeric>
+#include <unordered_map>
+#include <vector>
 
 INT *freqRel, *freqEnt;
 INT *lefHead, *rigHead;
 INT *lefTail, *rigTail;
 INT *lefRel, *rigRel;
 REAL *left_mean, *right_mean;
+
+std::unordered_map<std::string, INT> entity2id_map;
+std::unordered_map<std::string, INT> relation2id_map;
 
 Triple *trainList;
 Triple *trainHead;
@@ -19,6 +26,123 @@ Triple *trainRel;
 INT *testLef, *testRig;
 INT *validLef, *validRig;
 
+Triple *validClassPosList;
+Triple *validClassNegList;
+Triple *testClassPosList;
+Triple *testClassNegList;
+INT *validClassLef, *validClassRig;
+INT *testClassLef, *testClassRig;
+INT validClassTotal = 0;
+INT testClassTotal = 0;
+
+static void load_id_map(const std::string &file_path, INT total, std::unordered_map<std::string, INT> &mapping) {
+    mapping.clear();
+    std::ifstream fin(file_path.c_str());
+    if (!fin.is_open()) {
+        printf("Failed to open %s\n", file_path.c_str());
+        return;
+    }
+    INT file_total = 0;
+    fin >> file_total;
+    std::string name;
+    INT id;
+    for (INT i = 0; i < total && (fin >> name >> id); i++) {
+        mapping[name] = id;
+    }
+    fin.close();
+}
+
+static INT lookup_id(const std::unordered_map<std::string, INT> &mapping, const std::string &key, const char *kind, const std::string &file_path) {
+    auto it = mapping.find(key);
+    if (it == mapping.end()) {
+        printf("Unknown %s '%s' while reading %s\n", kind, key.c_str(), file_path.c_str());
+        return -1;
+    }
+    return it->second;
+}
+
+static void build_relation_bounds(Triple *list, INT total, INT *lef, INT *rig) {
+    if (total <= 0) {
+        return;
+    }
+    memset(lef, -1, sizeof(INT) * relationTotal);
+    memset(rig, -1, sizeof(INT) * relationTotal);
+    for (INT i = 1; i < total; i++) {
+        if (list[i].r != list[i - 1].r) {
+            rig[list[i - 1].r] = i - 1;
+            lef[list[i].r] = i;
+        }
+    }
+    lef[list[0].r] = 0;
+    rig[list[total - 1].r] = total - 1;
+}
+
+static void load_labeled_triple_file(const std::string &file_path, Triple *&pos_list, Triple *&neg_list, INT &total, INT *&lef, INT *&rig) {
+    std::ifstream fin(file_path.c_str());
+    if (!fin.is_open()) {
+        printf("Failed to open %s\n", file_path.c_str());
+        pos_list = nullptr;
+        neg_list = nullptr;
+        total = 0;
+        lef = nullptr;
+        rig = nullptr;
+        return;
+    }
+
+    std::vector<Triple> positives;
+    std::vector<Triple> negatives;
+    std::string head;
+    std::string rel;
+    std::string tail;
+    INT label;
+    while (fin >> head >> rel >> tail >> label) {
+        INT h = lookup_id(entity2id_map, head, "entity", file_path);
+        INT r = lookup_id(relation2id_map, rel, "relation", file_path);
+        INT t = lookup_id(entity2id_map, tail, "entity", file_path);
+        if (h < 0 || r < 0 || t < 0) {
+            continue;
+        }
+        Triple triple;
+        triple.h = h;
+        triple.r = r;
+        triple.t = t;
+        if (label > 0) {
+            positives.push_back(triple);
+        } else {
+            negatives.push_back(triple);
+        }
+    }
+    fin.close();
+
+    if (positives.empty() || negatives.empty()) {
+        printf("No labeled triples loaded from %s\n", file_path.c_str());
+        pos_list = nullptr;
+        neg_list = nullptr;
+        total = 0;
+        lef = nullptr;
+        rig = nullptr;
+        return;
+    }
+
+    INT class_total = std::min<INT>(positives.size(), negatives.size());
+    std::vector<INT> order(class_total);
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&](INT a, INT b) {
+        return Triple::cmp_rel2(positives[a], positives[b]);
+    });
+
+    pos_list = (Triple *)calloc(class_total, sizeof(Triple));
+    neg_list = (Triple *)calloc(class_total, sizeof(Triple));
+    for (INT i = 0; i < class_total; i++) {
+        pos_list[i] = positives[order[i]];
+        neg_list[i] = negatives[order[i]];
+    }
+    total = class_total;
+    lef = (INT *)calloc(relationTotal, sizeof(INT));
+    rig = (INT *)calloc(relationTotal, sizeof(INT));
+    build_relation_bounds(pos_list, total, lef, rig);
+}
+
 extern "C"
 void importTrainFiles() {
 
@@ -26,8 +150,8 @@ void importTrainFiles() {
 	FILE *fin;
 	int tmp;
 
-	fin = fopen((inPath + "relation2id.txt").c_str(), "r");
-	tmp = fscanf(fin, "%ld", &relationTotal);
+    fin = fopen((inPath + "relation2id.txt").c_str(), "r");
+    tmp = fscanf(fin, "%ld", &relationTotal);
 	printf("The total of relations is %ld.\n", relationTotal);
 	fclose(fin);
 
@@ -136,6 +260,10 @@ void importTestFiles() {
     fin = fopen((inPath + "entity2id.txt").c_str(), "r");
     tmp = fscanf(fin, "%ld", &entityTotal);
     fclose(fin);
+
+	load_id_map(inPath + "relation2id.txt", relationTotal, relation2id_map);
+	load_id_map(inPath + "entity2id.txt", entityTotal, entity2id_map);
+
     if (testFilePath == "")
         testFilePath = inPath + "test2id.txt";
     FILE* f_kb1 = fopen(testFilePath.c_str(), "r");
@@ -200,6 +328,17 @@ void importTestFiles() {
     }
     validLef[validList[0].r] = 0;
     validRig[validList[validTotal - 1].r] = validTotal - 1;
+
+    if (tripleClassificationPath != "") {
+        load_labeled_triple_file(tripleClassificationPath + "valid.txt", validClassPosList, validClassNegList, validClassTotal, validClassLef, validClassRig);
+        load_labeled_triple_file(tripleClassificationPath + "test.txt", testClassPosList, testClassNegList, testClassTotal, testClassLef, testClassRig);
+        if (validClassTotal > 0) {
+            printf("The total of labeled valid triples is %ld.\n", validClassTotal);
+        }
+        if (testClassTotal > 0) {
+            printf("The total of labeled test triples is %ld.\n", testClassTotal);
+        }
+    }
 }
 
 INT* head_lef;

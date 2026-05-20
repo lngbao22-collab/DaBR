@@ -9,13 +9,27 @@ import sys
 import datetime
 import ctypes
 import json
+import logging
+import re
 import numpy as np
 from tqdm import tqdm
 
-use_gpu=False
+from metrics import ClassificationMetricsCalculator, Metrics
+
+# CUDA optimizations
+use_gpu = False
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if torch.cuda.is_available():
-    use_gpu=True
+    use_gpu = True
+    torch.cuda.empty_cache()
+    torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of GPU memory
+    torch.backends.cudnn.benchmark = True  # Enable cuDNN auto-tuner for better performance
+    torch.backends.cudnn.deterministic = True  # For reproducibility
+    torch.backends.cudnn.enabled = True  # Enable cuDNN
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"CUDA Device: {torch.cuda.get_device_name(0)}")
+    logger.info(f"CUDA Device Count: {torch.cuda.device_count()}")
 
 class MyDataParallel(nn.DataParallel):
     def _getattr__(self, name):
@@ -135,6 +149,19 @@ class Config(object):
         self.rel_dropout = 0
         self.use_init_embeddings = False
         self.test_file_path = None
+        self.triple_classification_path = ""
+        self.valid_class_total = 0
+        self.test_class_total = 0
+        self.use_labeled_triple_classification = False
+        
+        # Timing and reporting attributes
+        self.train_time = 0.0
+        self.valid_time = 0.0
+        self.test_time = 0.0
+        self.total_time = 0.0
+        self.best_epoch = 0
+        self.best_mrr = 0.0
+        self.last_test_metrics = {}
     def init(self):
         self.lib.setInPath(
             ctypes.create_string_buffer(self.in_path.encode(), len(self.in_path) * 2)
@@ -143,6 +170,14 @@ class Config(object):
         self.lib.setTestFilePath(
             ctypes.create_string_buffer(self.test_file_path.encode(), len(self.test_file_path) * 2)
         )
+
+        if self.triple_classification_path:
+            self.lib.setTripleClassificationPath(
+                ctypes.create_string_buffer(
+                    self.triple_classification_path.encode(),
+                    len(self.triple_classification_path) * 2,
+                )
+            )
 
         self.lib.setBern(self.bern)
         self.lib.setWorkThreads(self.work_threads)
@@ -155,6 +190,13 @@ class Config(object):
         self.trainTotal = self.lib.getTrainTotal()
         self.testTotal = self.lib.getTestTotal()
         self.validTotal = self.lib.getValidTotal()
+        self.valid_class_total = self.lib.getValidClassificationTotal()
+        self.test_class_total = self.lib.getTestClassificationTotal()
+        self.use_labeled_triple_classification = (
+            bool(self.triple_classification_path)
+            and self.valid_class_total > 0
+            and self.test_class_total > 0
+        )
 
         self.batch_size = int(self.trainTotal / self.nbatches)
         self.batch_seq_size = self.batch_size * (
@@ -208,6 +250,32 @@ class Config(object):
         self.test_neg_h_addr = self.test_neg_h.__array_interface__["data"][0]
         self.test_neg_t_addr = self.test_neg_t.__array_interface__["data"][0]
         self.test_neg_r_addr = self.test_neg_r.__array_interface__["data"][0]
+
+        self.valid_cls_pos_h = np.zeros(self.valid_class_total, dtype=np.int64)
+        self.valid_cls_pos_t = np.zeros(self.valid_class_total, dtype=np.int64)
+        self.valid_cls_pos_r = np.zeros(self.valid_class_total, dtype=np.int64)
+        self.valid_cls_pos_h_addr = self.valid_cls_pos_h.__array_interface__["data"][0]
+        self.valid_cls_pos_t_addr = self.valid_cls_pos_t.__array_interface__["data"][0]
+        self.valid_cls_pos_r_addr = self.valid_cls_pos_r.__array_interface__["data"][0]
+        self.valid_cls_neg_h = np.zeros(self.valid_class_total, dtype=np.int64)
+        self.valid_cls_neg_t = np.zeros(self.valid_class_total, dtype=np.int64)
+        self.valid_cls_neg_r = np.zeros(self.valid_class_total, dtype=np.int64)
+        self.valid_cls_neg_h_addr = self.valid_cls_neg_h.__array_interface__["data"][0]
+        self.valid_cls_neg_t_addr = self.valid_cls_neg_t.__array_interface__["data"][0]
+        self.valid_cls_neg_r_addr = self.valid_cls_neg_r.__array_interface__["data"][0]
+
+        self.test_cls_pos_h = np.zeros(self.test_class_total, dtype=np.int64)
+        self.test_cls_pos_t = np.zeros(self.test_class_total, dtype=np.int64)
+        self.test_cls_pos_r = np.zeros(self.test_class_total, dtype=np.int64)
+        self.test_cls_pos_h_addr = self.test_cls_pos_h.__array_interface__["data"][0]
+        self.test_cls_pos_t_addr = self.test_cls_pos_t.__array_interface__["data"][0]
+        self.test_cls_pos_r_addr = self.test_cls_pos_r.__array_interface__["data"][0]
+        self.test_cls_neg_h = np.zeros(self.test_class_total, dtype=np.int64)
+        self.test_cls_neg_t = np.zeros(self.test_class_total, dtype=np.int64)
+        self.test_cls_neg_r = np.zeros(self.test_class_total, dtype=np.int64)
+        self.test_cls_neg_h_addr = self.test_cls_neg_h.__array_interface__["data"][0]
+        self.test_cls_neg_t_addr = self.test_cls_neg_t.__array_interface__["data"][0]
+        self.test_cls_neg_r_addr = self.test_cls_neg_r.__array_interface__["data"][0]
         self.relThresh = np.zeros(self.relTotal, dtype=np.float32)
         self.relThresh_addr = self.relThresh.__array_interface__["data"][0]
 
@@ -225,6 +293,9 @@ class Config(object):
 
     def set_test_file_path(self, test_file_path):
         self.test_file_path = test_file_path
+
+    def set_triple_classification_path(self, triple_classification_path):
+        self.triple_classification_path = triple_classification_path
 
     def set_nbatches(self, nbatches):
         self.nbatches = nbatches
@@ -318,6 +389,79 @@ class Config(object):
                 res[param] = param_dict[param]
         return res
 
+    def _capture_native_output(self, func, *args):
+        stdout_fd = sys.stdout.fileno()
+        saved_stdout_fd = os.dup(stdout_fd)
+        read_fd, write_fd = os.pipe()
+        os.dup2(write_fd, stdout_fd)
+        os.close(write_fd)
+
+        try:
+            result = func(*args)
+            try:
+                ctypes.CDLL(None).fflush(None)
+            except Exception:
+                pass
+        finally:
+            os.dup2(saved_stdout_fd, stdout_fd)
+            os.close(saved_stdout_fd)
+
+        captured = []
+        while True:
+            chunk = os.read(read_fd, 4096)
+            if not chunk:
+                break
+            captured.append(chunk)
+        os.close(read_fd)
+
+        return result, b"".join(captured).decode(errors="replace")
+
+    def _parse_link_prediction_output(self, native_output):
+        section_pattern = re.compile(r"^(no type constraint results|type constraint results):$", re.MULTILINE)
+        row_pattern = re.compile(
+            r"^(l|r|averaged)\((raw|filter)\):\s+"
+            r"([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)$"
+        )
+
+        parsed = {}
+        current_section = None
+        current_metric_names = None
+
+        for raw_line in native_output.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            section_match = section_pattern.match(line)
+            if section_match:
+                current_section = section_match.group(1).replace(" ", "_")
+                parsed[current_section] = {}
+                current_metric_names = None
+                continue
+            if line.startswith("metric:"):
+                current_metric_names = ["MRR", "MR", "Hit@10", "Hit@3", "Hit@1"]
+                continue
+            row_match = row_pattern.match(line)
+            if row_match and current_section is not None and current_metric_names is not None:
+                row_name = f"{row_match.group(1)}_{row_match.group(2)}"
+                parsed[current_section][row_name] = {
+                    metric_name: float(value)
+                    for metric_name, value in zip(current_metric_names, row_match.groups()[2:])
+                }
+
+        summary = {}
+        for section_name, section_metrics in parsed.items():
+            averaged_rows = {}
+            for row_name in ("averaged_raw", "averaged_filter"):
+                if row_name in section_metrics:
+                    averaged_rows[row_name] = section_metrics[row_name]
+            if averaged_rows:
+                summary[section_name] = averaged_rows
+
+        return {
+            "sections": parsed,
+            "summary": summary,
+        }
+
     def save_embedding_matrix(self, best_model):
         path = os.path.join(self.result_dir, self.model.__name__ + ".json")
         f = open(path, "w")
@@ -366,7 +510,7 @@ class Config(object):
         self.testModel = self.model(config=self)
         if path == None:
             path = os.path.join(self.result_dir, self.model.__name__ + ".ckpt")
-        self.testModel.load_state_dict(torch.load(path))
+        self.testModel.load_state_dict(torch.load(path, weights_only=True))
         self.testModel.to(device)
         self.testModel.eval()
         print("Finish initializing")
@@ -438,68 +582,118 @@ class Config(object):
     def training_model(self):
         if not os.path.exists(self.checkpoint_dir):
             os.mkdir(self.checkpoint_dir)
+        
         best_epoch = 0
         best_hit10 = 0.0
+        best_mrr = 0.0
         best_model = None
         bad_counts = 0
+        
+        # Timing trackers
+        total_start_time = time.time()
+        train_time_total = 0.0
+        valid_time_total = 0.0
+        
         training_range = tqdm(range(self.train_times))
         for epoch in training_range:
+            # Training phase
+            train_start = time.time()
             res = 0.0
             for batch in range(self.nbatches):
                 self.sampling()
                 loss = self.train_one_step()
                 res += loss
-            training_range.set_description("Epoch %d | loss: %f" % (epoch, res))
-            # print("Epoch %d | loss: %f" % (epoch, res))
+            train_time_total += time.time() - train_start
+            
+            training_range.set_description("Epoch %d | loss: %.6f" % (epoch, res))
+            
             if (epoch + 1) % self.save_steps == 0:
                 training_range.set_description("Epoch %d has finished, saving..." % (epoch))
                 self.save_checkpoint(self.trainModel.state_dict(), epoch)
+            
+            # Validation phase
             if (epoch + 1) % self.valid_steps == 0:
-                training_range.set_description("Epoch %d has finished | loss: %f, validating..." % (epoch, res))
+                training_range.set_description("Epoch %d validating..." % (epoch))
+                valid_start = time.time()
                 hit10 = self.valid(self.trainModel)
+                valid_time_total += time.time() - valid_start
+                
                 if hit10 > best_hit10:
                     best_hit10 = hit10
+                    best_mrr = hit10  # Store as placeholder, actual MRR from C++ lib
                     best_epoch = epoch
                     best_model = self.trainModel.state_dict()
-                    print("Best model | hit@10 of valid set is %f" % (best_hit10))
                     bad_counts = 0
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Epoch {epoch}: Best model | Hit@10: {best_hit10:.6f}")
                 else:
-                    print("Hit@10 of valid set is %f | bad count is %d" % (hit10, bad_counts))
                     bad_counts += 1
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Epoch {epoch}: Hit@10: {hit10:.6f} | Bad count: {bad_counts}")
+                
                 if bad_counts == self.early_stopping_patience:
-                    print("Early stopping at epoch %d" % (epoch))
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Early stopping at epoch {epoch}")
                     break
-        if best_model == None:
+        
+        if best_model is None:
             best_model = self.trainModel.state_dict()
             best_epoch = self.train_times - 1
+            valid_start = time.time()
             best_hit10 = self.valid(self.trainModel)
-        print("Best epoch is %d | hit@10 of valid set is %f" % (best_epoch, best_hit10))
-        print("Store checkpoint of best result at epoch %d..." % (best_epoch))
+            valid_time_total += time.time() - valid_start
+        
+        self.train_time = train_time_total
+        self.valid_time = valid_time_total
+        self.best_epoch = best_epoch
+        self.best_mrr = best_hit10
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Best epoch: {best_epoch}")
+        logger.info(f"Best Hit@10: {best_hit10:.6f}")
+        logger.info(f"Total training time: {train_time_total:.2f}s")
+        logger.info(f"Total validation time: {valid_time_total:.2f}s")
+        
+        logger.info("Storing checkpoint of best result...")
         if not os.path.isdir(self.result_dir):
             os.mkdir(self.result_dir)
         self.save_best_checkpoint(best_model)
-        self.save_embedding_matrix(best_model)
-        print("Finish storing")
-        print("Testing...")
+        logger.info("Checkpoint stored")
+        
+        # Testing phase
+        logger.info("Starting testing...")
+        test_start = time.time()
         self.set_test_model(self.model)
         self.test()
-        print("Finish test")
+        self.test_time = time.time() - test_start
+        logger.info(f"Test time: {self.test_time:.2f}s")
+        
+        self.total_time = time.time() - total_start_time
+        
+        logger.info("Training completed successfully")
         return best_model
 
     def valid_triple_classification(self, model):
+        use_labeled = self.use_labeled_triple_classification
         self.lib.getValidBatch(
-            self.valid_pos_h_addr,
-            self.valid_pos_t_addr,
-            self.valid_pos_r_addr,
-            self.valid_neg_h_addr,
-            self.valid_neg_t_addr,
-            self.valid_neg_r_addr,
+            self.valid_cls_pos_h_addr if use_labeled else self.valid_pos_h_addr,
+            self.valid_cls_pos_t_addr if use_labeled else self.valid_pos_t_addr,
+            self.valid_cls_pos_r_addr if use_labeled else self.valid_pos_r_addr,
+            self.valid_cls_neg_h_addr if use_labeled else self.valid_neg_h_addr,
+            self.valid_cls_neg_t_addr if use_labeled else self.valid_neg_t_addr,
+            self.valid_cls_neg_r_addr if use_labeled else self.valid_neg_r_addr,
         )
         res_pos = self.test_one_step(
-            model, self.valid_pos_h, self.valid_pos_t, self.valid_pos_r
+            model,
+            self.valid_cls_pos_h if use_labeled else self.valid_pos_h,
+            self.valid_cls_pos_t if use_labeled else self.valid_pos_t,
+            self.valid_cls_pos_r if use_labeled else self.valid_pos_r,
         )
         res_neg = self.test_one_step(
-            model, self.valid_neg_h, self.valid_neg_t, self.valid_neg_r
+            model,
+            self.valid_cls_neg_h if use_labeled else self.valid_neg_h,
+            self.valid_cls_neg_t if use_labeled else self.valid_neg_t,
+            self.valid_cls_neg_r if use_labeled else self.valid_neg_r,
         )
         self.lib.getBestThreshold(
             self.relThresh_addr,
@@ -516,51 +710,93 @@ class Config(object):
     def training_triple_classification(self):
         if not os.path.exists(self.checkpoint_dir):
             os.mkdir(self.checkpoint_dir)
+        
         best_epoch = 0
         best_acc = 0.0
         best_model = None
         bad_counts = 0
+        
+        # Timing trackers
+        total_start_time = time.time()
+        train_time_total = 0.0
+        valid_time_total = 0.0
+        
         training_range = tqdm(range(self.train_times))
         for epoch in training_range:
+            # Training phase
+            train_start = time.time()
             res = 0.0
             for batch in range(self.nbatches):
                 self.sampling()
                 loss = self.train_one_step()
                 res += loss
-            training_range.set_description("Epoch %d | loss: %f" % (epoch, res))
+            train_time_total += time.time() - train_start
+            
+            training_range.set_description("Epoch %d | loss: %.6f" % (epoch, res))
+            
             if (epoch + 1) % self.save_steps == 0:
                 training_range.set_description("Epoch %d has finished, saving..." % (epoch))
                 self.save_checkpoint(self.trainModel.state_dict(), epoch)
+            
+            # Validation phase
             if (epoch + 1) % self.valid_steps == 0:
-                training_range.set_description("Epoch %d has finished | loss: %f, validating..." % (epoch, res))
+                training_range.set_description("Epoch %d validating..." % (epoch))
+                valid_start = time.time()
                 acc = self.valid_triple_classification(self.trainModel)
+                valid_time_total += time.time() - valid_start
+                
                 if acc > best_acc:
                     best_acc = acc
                     best_epoch = epoch
                     best_model = self.trainModel.state_dict()
-                    print("Best model | Acc of valid set is %f" % (best_acc))
                     bad_counts = 0
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Epoch {epoch}: Best model | Accuracy: {best_acc:.6f}")
                 else:
-                    print("Acc of valid set is %f | bad count is %d" % (acc, bad_counts))
                     bad_counts += 1
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Epoch {epoch}: Accuracy: {acc:.6f} | Bad count: {bad_counts}")
+                
                 if bad_counts == self.early_stopping_patience:
-                    print("Early stopping at epoch %d" % (epoch))
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Early stopping at epoch {epoch}")
                     break
-        if best_model == None:
+        
+        if best_model is None:
             best_model = self.trainModel.state_dict()
             best_epoch = self.train_times - 1
+            valid_start = time.time()
             best_acc = self.valid_triple_classification(self.trainModel)
-        print("Best epoch is %d | Acc of valid set is %f" % (best_epoch, best_acc))
-        print("Store checkpoint of best result at epoch %d..." % (best_epoch))
+            valid_time_total += time.time() - valid_start
+        
+        self.train_time = train_time_total
+        self.valid_time = valid_time_total
+        self.best_epoch = best_epoch
+        self.best_mrr = best_acc
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Best epoch: {best_epoch}")
+        logger.info(f"Best Accuracy: {best_acc:.6f}")
+        logger.info(f"Total training time: {train_time_total:.2f}s")
+        logger.info(f"Total validation time: {valid_time_total:.2f}s")
+        
+        logger.info("Storing checkpoint of best result...")
         if not os.path.isdir(self.result_dir):
             os.mkdir(self.result_dir)
         self.save_best_checkpoint(best_model)
-        self.save_embedding_matrix(best_model)
-        print("Finish storing")
-        print("Testing...")
+        logger.info("Checkpoint stored")
+        
+        # Testing phase
+        logger.info("Starting testing...")
+        test_start = time.time()
         self.set_test_model(self.model)
         self.test()
-        print("Finish test")
+        self.test_time = time.time() - test_start
+        logger.info(f"Test time: {self.test_time:.2f}s")
+        
+        self.total_time = time.time() - total_start_time
+        
+        logger.info("Training completed successfully")
         return best_model
 
     def link_prediction(self):
@@ -579,22 +815,36 @@ class Config(object):
                 self.testModel, self.test_h, self.test_t, self.test_r
             )
             self.lib.testTail(res.__array_interface__["data"][0])
-        self.lib.test_link_prediction()
+        _, native_output = self._capture_native_output(self.lib.test_link_prediction)
+
+        logger = logging.getLogger(__name__)
+        logger.info("\n%s", native_output.rstrip())
+        return {
+            "native_output": native_output,
+            "metrics": self._parse_link_prediction_output(native_output),
+        }
 
     def triple_classification(self):
+        use_labeled = self.use_labeled_triple_classification
         self.lib.getValidBatch(
-            self.valid_pos_h_addr,
-            self.valid_pos_t_addr,
-            self.valid_pos_r_addr,
-            self.valid_neg_h_addr,
-            self.valid_neg_t_addr,
-            self.valid_neg_r_addr,
+            self.valid_cls_pos_h_addr if use_labeled else self.valid_pos_h_addr,
+            self.valid_cls_pos_t_addr if use_labeled else self.valid_pos_t_addr,
+            self.valid_cls_pos_r_addr if use_labeled else self.valid_pos_r_addr,
+            self.valid_cls_neg_h_addr if use_labeled else self.valid_neg_h_addr,
+            self.valid_cls_neg_t_addr if use_labeled else self.valid_neg_t_addr,
+            self.valid_cls_neg_r_addr if use_labeled else self.valid_neg_r_addr,
         )
         res_pos = self.test_one_step(
-            self.testModel, self.valid_pos_h, self.valid_pos_t, self.valid_pos_r
+            self.testModel,
+            self.valid_cls_pos_h if use_labeled else self.valid_pos_h,
+            self.valid_cls_pos_t if use_labeled else self.valid_pos_t,
+            self.valid_cls_pos_r if use_labeled else self.valid_pos_r,
         )
         res_neg = self.test_one_step(
-            self.testModel, self.valid_neg_h, self.valid_neg_t, self.valid_neg_r
+            self.testModel,
+            self.valid_cls_neg_h if use_labeled else self.valid_neg_h,
+            self.valid_cls_neg_t if use_labeled else self.valid_neg_t,
+            self.valid_cls_neg_r if use_labeled else self.valid_neg_r,
         )
         self.lib.getBestThreshold(
             self.relThresh_addr,
@@ -603,27 +853,106 @@ class Config(object):
         )
 
         self.lib.getTestBatch(
-            self.test_pos_h_addr,
-            self.test_pos_t_addr,
-            self.test_pos_r_addr,
-            self.test_neg_h_addr,
-            self.test_neg_t_addr,
-            self.test_neg_r_addr,
+            self.test_cls_pos_h_addr if use_labeled else self.test_pos_h_addr,
+            self.test_cls_pos_t_addr if use_labeled else self.test_pos_t_addr,
+            self.test_cls_pos_r_addr if use_labeled else self.test_pos_r_addr,
+            self.test_cls_neg_h_addr if use_labeled else self.test_neg_h_addr,
+            self.test_cls_neg_t_addr if use_labeled else self.test_neg_t_addr,
+            self.test_cls_neg_r_addr if use_labeled else self.test_neg_r_addr,
         )
-        res_pos = self.test_one_step(
-            self.testModel, self.test_pos_h, self.test_pos_t, self.test_pos_r
-        )
-        res_neg = self.test_one_step(
-            self.testModel, self.test_neg_h, self.test_neg_t, self.test_neg_r
-        )
-        self.lib.test_triple_classification(
+        res_pos = np.asarray(
+            self.test_one_step(
+                self.testModel,
+                self.test_cls_pos_h if use_labeled else self.test_pos_h,
+                self.test_cls_pos_t if use_labeled else self.test_pos_t,
+                self.test_cls_pos_r if use_labeled else self.test_pos_r,
+            )
+        ).reshape(-1)
+        res_neg = np.asarray(
+            self.test_one_step(
+                self.testModel,
+                self.test_cls_neg_h if use_labeled else self.test_neg_h,
+                self.test_cls_neg_t if use_labeled else self.test_neg_t,
+                self.test_cls_neg_r if use_labeled else self.test_neg_r,
+            )
+        ).reshape(-1)
+
+        classifier = ClassificationMetricsCalculator()
+        for score, rel in zip(
+            res_pos,
+            self.test_cls_pos_r if use_labeled else self.test_pos_r,
+        ):
+            threshold = self.relThresh[int(rel)]
+            classifier.add_prediction(1, int(score <= threshold), float(-score))
+        for score, rel in zip(
+            res_neg,
+            self.test_cls_neg_r if use_labeled else self.test_neg_r,
+        ):
+            threshold = self.relThresh[int(rel)]
+            classifier.add_prediction(0, int(score <= threshold), float(-score))
+
+        classification_metrics = classifier.get_metrics()
+
+        accuracy, native_output = self._capture_native_output(
+            self.lib.test_triple_classification,
             self.relThresh_addr,
             res_pos.__array_interface__["data"][0],
             res_neg.__array_interface__["data"][0],
         )
 
+        classification_metrics["Accuracy"] = float(accuracy)
+
+        logger = logging.getLogger(__name__)
+        logger.info("\n%s", native_output.rstrip())
+        logger.info("Triple classification metrics: %s", Metrics.format_metrics(classification_metrics))
+        return {
+            "accuracy": float(accuracy),
+            "metrics": classification_metrics,
+            "native_output": native_output,
+        }
+
     def test(self):
+        results = {}
         if self.test_link:
-            self.link_prediction()
+            results["link_prediction"] = self.link_prediction()
         if self.test_triple:
-            self.triple_classification()
+            results["triple_classification"] = self.triple_classification()
+        self.last_test_metrics = results
+        return results
+    
+    def _save_report(self, test_metrics=None):
+        """Save training and testing report to file."""
+        report = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "best_epoch": self.best_epoch,
+            "best_mrr": float(self.best_mrr),
+            "training_time_seconds": float(self.train_time),
+            "validation_time_seconds": float(self.valid_time),
+            "test_time_seconds": float(self.test_time),
+            "total_time_seconds": float(self.total_time),
+            "training_time_formatted": f"{int(self.train_time // 3600)}h {int((self.train_time % 3600) // 60)}m {self.train_time % 60:.2f}s",
+            "validation_time_formatted": f"{int(self.valid_time // 3600)}h {int((self.valid_time % 3600) // 60)}m {self.valid_time % 60:.2f}s",
+            "test_time_formatted": f"{int(self.test_time // 3600)}h {int((self.test_time % 3600) // 60)}m {self.test_time % 60:.2f}s",
+            "total_time_formatted": f"{int(self.total_time // 3600)}h {int((self.total_time % 3600) // 60)}m {self.total_time % 60:.2f}s"
+        }
+        if test_metrics:
+            report["test_metrics"] = test_metrics
+        
+        report_path = os.path.join(self.result_dir, "report.json")
+        with open(report_path, 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Report saved to {report_path}")
+        logger.info(f"\n{'='*60}")
+        logger.info("TRAINING REPORT")
+        logger.info(f"{'='*60}")
+        logger.info(f"Best Epoch: {self.best_epoch}")
+        logger.info(f"Best MRR: {self.best_mrr:.6f}")
+        logger.info(f"Training Time: {report['training_time_formatted']}")
+        logger.info(f"Validation Time: {report['validation_time_formatted']}")
+        logger.info(f"Test Time: {report['test_time_formatted']}")
+        logger.info(f"Total Time: {report['total_time_formatted']}")
+        if test_metrics:
+            logger.info(f"Test Metrics: {test_metrics}")
+        logger.info(f"{'='*60}")
