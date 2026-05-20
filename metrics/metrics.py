@@ -1,9 +1,3 @@
-# coding: utf-8
-"""
-Metrics module for both link prediction and triple classification tasks.
-Includes ranking metrics and classification metrics.
-"""
-
 import numpy as np
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.metrics import roc_auc_score, average_precision_score

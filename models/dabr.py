@@ -1,12 +1,6 @@
 import torch
-import torch.autograd as autograd
 import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.autograd import Variable
-import numpy as np
 from .model import Model
-from numpy.random import RandomState
 
 torch.manual_seed(123)
 if torch.cuda.is_available():

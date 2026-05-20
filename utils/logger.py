@@ -1,8 +1,4 @@
 # coding: utf-8
-"""
-Logging utilities for DaBR training and testing.
-"""
-
 import os
 import logging
 import json
