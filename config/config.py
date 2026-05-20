@@ -162,6 +162,19 @@ class Config(object):
         self.best_epoch = 0
         self.best_mrr = 0.0
         self.last_test_metrics = {}
+
+    def _native_function(self, name):
+        try:
+            return getattr(self.lib, name)
+        except AttributeError:
+            return None
+
+    def _call_native_if_available(self, name, *args):
+        func = self._native_function(name)
+        if func is None:
+            return None
+        return func(*args)
+
     def init(self):
         self.lib.setInPath(
             ctypes.create_string_buffer(self.in_path.encode(), len(self.in_path) * 2)
@@ -172,12 +185,20 @@ class Config(object):
         )
 
         if self.triple_classification_path:
-            self.lib.setTripleClassificationPath(
-                ctypes.create_string_buffer(
-                    self.triple_classification_path.encode(),
-                    len(self.triple_classification_path) * 2,
+            triple_path_func = self._native_function("setTripleClassificationPath")
+            if triple_path_func is not None:
+                triple_path_func(
+                    ctypes.create_string_buffer(
+                        self.triple_classification_path.encode(),
+                        len(self.triple_classification_path) * 2,
+                    )
                 )
-            )
+            else:
+                print(
+                    "Warning: native library does not expose setTripleClassificationPath; "
+                    "triple classification will be disabled for this run."
+                )
+                self.triple_classification_path = ""
 
         self.lib.setBern(self.bern)
         self.lib.setWorkThreads(self.work_threads)
@@ -190,8 +211,16 @@ class Config(object):
         self.trainTotal = self.lib.getTrainTotal()
         self.testTotal = self.lib.getTestTotal()
         self.validTotal = self.lib.getValidTotal()
-        self.valid_class_total = self.lib.getValidClassificationTotal()
-        self.test_class_total = self.lib.getTestClassificationTotal()
+        self.valid_class_total = self._call_native_if_available(
+            "getValidClassificationTotal"
+        )
+        self.test_class_total = self._call_native_if_available(
+            "getTestClassificationTotal"
+        )
+        if self.valid_class_total is None:
+            self.valid_class_total = 0
+        if self.test_class_total is None:
+            self.test_class_total = 0
         self.use_labeled_triple_classification = (
             bool(self.triple_classification_path)
             and self.valid_class_total > 0
