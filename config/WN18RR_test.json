@@ -13,7 +13,7 @@
   "eta1": 0.01,
   "eta2": 0.01,
   "model_type": "entity_relation_embedding",
-  "t_uni": 2.0,
+  "t_uni": 3.0,
   "gamma_uni_ent": 1.0,
   "gamma_uni_tail": 1.0,
   "gamma_uni_head": 1.0,
