@@ -134,7 +134,9 @@ class Config(object):
         self.lr_decay = 0
         self.weight_decay = 0
         self.lmbda = 0.0
-        self.lmbda_two = 0.0
+        self.lmbda_two = 0.01
+        self.eta1 = 0.01
+        self.eta2 = 0.01
         self.alpah = 0.001
         self.early_stopping_patience = 10
         self.nbatches = 100
@@ -162,6 +164,16 @@ class Config(object):
         self.best_epoch = 0
         self.best_mrr = 0.0
         self.last_test_metrics = {}
+
+        # DirectAU-DaBR defaults
+        self.model_type = "entity_relation_embedding"
+        self.t_uni = 2.0
+        self.gamma_uni_ent = 1.0
+        self.gamma_uni_tail = 1.0
+        self.gamma_uni_head = 1.0
+        self.gamma_uni_query = 1.0
+        self.gamma_neg = 1.0
+        self.epsilon = 1e-8
 
     def _native_function(self, name):
         try:
@@ -352,6 +364,36 @@ class Config(object):
         
     def set_lmbda_two(self, lmbda_two):
         self.lmbda_two = lmbda_two
+
+    def set_eta1(self, eta1):
+        self.eta1 = eta1
+
+    def set_eta2(self, eta2):
+        self.eta2 = eta2
+
+    def set_model_type(self, model_type):
+        self.model_type = model_type
+
+    def set_t_uni(self, t_uni):
+        self.t_uni = t_uni
+
+    def set_gamma_uni_ent(self, gamma_uni_ent):
+        self.gamma_uni_ent = gamma_uni_ent
+
+    def set_gamma_uni_tail(self, gamma_uni_tail):
+        self.gamma_uni_tail = gamma_uni_tail
+
+    def set_gamma_uni_head(self, gamma_uni_head):
+        self.gamma_uni_head = gamma_uni_head
+
+    def set_gamma_uni_query(self, gamma_uni_query):
+        self.gamma_uni_query = gamma_uni_query
+
+    def set_gamma_neg(self, gamma_neg):
+        self.gamma_neg = gamma_neg
+
+    def set_epsilon(self, epsilon):
+        self.epsilon = epsilon
 
     def set_lr_decay(self, lr_decay):
         self.lr_decay = lr_decay
