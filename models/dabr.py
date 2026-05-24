@@ -74,11 +74,12 @@ class DaBR(Model):
         hr = DaBR.vec_vec_wise_multiplication(h, r)
         r_inv = DaBR.get_inv(r)
         tr = DaBR.vec_vec_wise_multiplication(t, r_inv)
-        score_s = hr * tr
+        # Sum across the embedding dimensions to get the scalar inner product
+        score_s = torch.sum(hr * tr, dim=-1)
         #distance
         hrt = h + dr - t
-        s_d, x_d, y_d, z_d = torch.chunk(hrt, 4, dim=1)
-        score_d = s_d + x_d + y_d + z_d
+        # Calculate L1 norm directly on the difference vector. 
+        score_d = torch.norm(hrt, p=1, dim=-1)
         return -torch.sum(score_s, -1) - para * torch.norm(score_d, p=1, dim=-1)
 
     @staticmethod
