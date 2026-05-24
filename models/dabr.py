@@ -78,7 +78,7 @@ class DaBR(Model):
         score_s = torch.sum(hr * tr, dim=-1)
         #distance
         hrt = h + dr - t
-        # Calculate L1 norm directly on the difference vector. 
+        # Calculate L1 norm directly on the difference vector
         score_d = torch.norm(hrt, p=1, dim=-1)
         return -(score_s - para * score_d)
 
