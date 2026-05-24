@@ -3,7 +3,7 @@
   "benchmark_path": "./benchmarks/WN18RR/",
   "learning_rate": 0.1,
   "nbatches": 100,
-  "num_epochs": 8000,
+  "num_epochs": 400,
   "neg_num": 5,
   "hidden_size": 200,
   "save_steps": 40,
