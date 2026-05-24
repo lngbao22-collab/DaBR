@@ -80,7 +80,7 @@ class DaBR(Model):
         hrt = h + dr - t
         # Calculate L1 norm directly on the difference vector. 
         score_d = torch.norm(hrt, p=1, dim=-1)
-        return -torch.sum(score_s, -1) - para * torch.norm(score_d, p=1, dim=-1)
+        return -(score_s - para * score_d)
 
     @staticmethod
     def regularization(quaternion):  # vectorized quaternion bs x 4dim
