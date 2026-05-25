@@ -11,6 +11,13 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 
 class Metrics:
     """Metrics calculator for knowledge graph embedding models."""
+
+    @staticmethod
+    def _to_python_number(value):
+        """Convert NumPy scalar types into native Python numbers."""
+        if isinstance(value, np.generic):
+            return value.item()
+        return value
     
     @staticmethod
     def calculate_ranking_metrics(ranks, hits):
@@ -31,11 +38,11 @@ class Metrics:
         mrr = np.mean(1.0 / ranks)
         
         metrics = {
-            'MR': mr,
-            'MRR': mrr,
-            'Hit@1': hits.get('hit@1', 0) / n if n > 0 else 0,
-            'Hit@3': hits.get('hit@3', 0) / n if n > 0 else 0,
-            'Hit@10': hits.get('hit@10', 0) / n if n > 0 else 0,
+            'MR': float(mr),
+            'MRR': float(mrr),
+            'Hit@1': float(hits.get('hit@1', 0) / n) if n > 0 else 0.0,
+            'Hit@3': float(hits.get('hit@3', 0) / n) if n > 0 else 0.0,
+            'Hit@10': float(hits.get('hit@10', 0) / n) if n > 0 else 0.0,
         }
         
         return metrics
@@ -59,13 +66,13 @@ class Metrics:
         metrics = {}
         
         # Basic classification metrics
-        metrics['Accuracy'] = accuracy_score(y_true, y_pred)
+        metrics['Accuracy'] = float(accuracy_score(y_true, y_pred))
         
         # Handle precision/recall for binary classification
         if len(np.unique(y_true)) > 1:
-            metrics['Precision'] = precision_score(y_true, y_pred, average='binary', zero_division=0)
-            metrics['Recall'] = recall_score(y_true, y_pred, average='binary', zero_division=0)
-            metrics['F1-Score'] = f1_score(y_true, y_pred, average='binary', zero_division=0)
+            metrics['Precision'] = float(precision_score(y_true, y_pred, average='binary', zero_division=0))
+            metrics['Recall'] = float(recall_score(y_true, y_pred, average='binary', zero_division=0))
+            metrics['F1-Score'] = float(f1_score(y_true, y_pred, average='binary', zero_division=0))
         else:
             # If only one class in labels, return 0
             metrics['Precision'] = 0.0
@@ -76,12 +83,12 @@ class Metrics:
         if y_scores is not None:
             y_scores = np.array(y_scores)
             try:
-                metrics['ROC-AUC'] = roc_auc_score(y_true, y_scores)
+                metrics['ROC-AUC'] = float(roc_auc_score(y_true, y_scores))
             except:
                 metrics['ROC-AUC'] = 0.0
             
             try:
-                metrics['PR-AUC'] = average_precision_score(y_true, y_scores)
+                metrics['PR-AUC'] = float(average_precision_score(y_true, y_scores))
             except:
                 metrics['PR-AUC'] = 0.0
         else:
@@ -103,7 +110,8 @@ class Metrics:
         """
         lines = []
         for key, value in metrics_dict.items():
-            if isinstance(value, float):
+            value = Metrics._to_python_number(value)
+            if isinstance(value, (float, np.floating)):
                 lines.append(f"{key}: {value:.4f}")
             else:
                 lines.append(f"{key}: {value}")

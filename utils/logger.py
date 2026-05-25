@@ -7,6 +7,7 @@ import os
 import logging
 import json
 from datetime import datetime
+from numbers import Real, Integral
 
 
 def setup_logger(name, log_dir='logs', level=logging.INFO):
@@ -85,9 +86,9 @@ class ResultReporter:
             f.write(f"Timestamp: {datetime.now().isoformat()}\n\n")
             
             for key, value in self.results.items():
-                if isinstance(value, float):
+                if isinstance(value, Real) and not isinstance(value, Integral):
                     f.write(f"{key:.<40} {value:.6f}\n")
-                elif isinstance(value, int):
+                elif isinstance(value, Integral):
                     f.write(f"{key:.<40} {value}\n")
                 else:
                     f.write(f"{key:.<40} {value}\n")
@@ -101,8 +102,10 @@ class ResultReporter:
         print("EXPERIMENT RESULTS")
         print("=" * 80)
         for key, value in self.results.items():
-            if isinstance(value, float):
+            if isinstance(value, Real) and not isinstance(value, Integral):
                 print(f"{key:.<40} {value:.6f}")
+            elif isinstance(value, Integral):
+                print(f"{key:.<40} {value}")
             else:
                 print(f"{key:.<40} {value}")
         print("=" * 80)
